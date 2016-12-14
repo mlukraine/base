@@ -1,0 +1,352 @@
+---
+title: "Преступность в Киеве"
+output: 
+  html_document: 
+    keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=FALSE, cahce=TRUE)
+data <- read.csv("criminal/all_data.csv", header = T, stringsAsFactors = F)
+library(dplyr)
+library(ggmap)
+library(ggplot2)
+library(readr)
+library(DT)
+library(reshape2)
+data$format_date <- strptime(data$date,"%d.%m.%Y %H:%M:%S")
+data$weekday<-format(data$format_date,"%a")
+data$weekday<-factor(x = data$weekday, levels=c("пн", "вт", "ср", "чт", "пт", "сб", "нд"))
+
+data$year<-format(data$format_date,"%Y")
+data$format_date <- NULL
+
+```
+
+## Общая информация о базе данных
+
+База данных содержит информацию о `r nrow(data)` правонарушениях, совершенных в городе Киеве с `r min(data$year)` по `r max(data$year)` годы.
+
+Распределение правонарушений по типам свидетельствует о достаточно несбалансированном наборе данных:
+
+```{r}
+Summary <- cbind(prettyNum(sort(table(data$event),decreasing=T), big.mark = " "),
+                 formatC(prop.table(sort(table(data$event),decreasing=T)), digits=4, format="f"))
+
+datatable(as.data.frame(Summary), 
+          options = list(pageLength = 1000, paging = F),
+          class = 'cell-border stripe',
+          filter = 'top',
+          colnames = c("Тип правонарушения", "Количество", "Частота"), 
+          caption = "Сводная таблица правонарушений")
+```
+
+Отдельно следует отметить, что ряд правонарушений в некоторые из годов в базу не попал вообще. Так например в 2014-2015 годах отсутствуют преступления, связанные с контрабандой, в 2014 - связанные с незаконной перевозкой лиц за границу и т.д. Ввиду этого рекомендуется исключить из дальнейшего анализа правонарушения, частота которых за весь период составляет менее 1 000 случаев.
+
+## Распределения правонарушений
+
+Распределение количества правонарушений по месяцам свидетельствует о том, что больше преступлений совершается в теплое время года, достигая пика в июле.
+
+```{r}
+
+data <- data[!data$event %in% names(table(data$event))[table(data$event) <= 1000],]
+
+data_plot <- data %>%
+        group_by(year,month) %>%
+        summarise(count = n()) 
+
+p <- ggplot(data = data_plot,aes(x=as.factor(month), y=count,fill = as.factor(month), group = month)) + 
+        geom_boxplot() + theme_bw() +
+        theme(legend.position="None") +
+        xlab("Місяць року")+
+        ylab("Кількість правопорушень")
+p
+```
+
+Несколько меньшее количество правонарушений происходит в выходные дни.
+
+```{r}
+
+data_plot <- data %>%
+        group_by(year,month,day,weekday) %>%
+        summarise(count = n()) 
+
+data_plot$weekday <- factor(data_plot$weekday,c("пн", "вт", "ср", "чт", "пт", "сб", "нд"),c("пн", "вт", "ср", "чт", "пт", "сб", "нд"))
+
+
+p <- ggplot(data = data_plot,aes(x=weekday, y=count,fill = weekday, group = weekday)) + 
+        geom_boxplot() + theme_bw() +
+        theme(legend.position="None") +
+        xlab("День тижня")+
+        ylab("Кількість правопорушень")
+p
+
+```
+
+Больше всего правонарушений происходит в 10 и 12 часов дня. Ночью количество правонарушений снижается.
+
+```{r}
+
+data_plot <- data %>%
+        group_by(year,month,day,weekday, hour) %>%
+        summarise(count = n()) 
+
+p <- ggplot(data = data_plot,aes(x=hour, y=count,fill = as.factor(hour), group = hour)) + 
+        geom_boxplot() + theme_bw() +
+        theme(legend.position="None") +
+        xlab("Години")+
+        ylab("Кількість правопорушень")
+p
+
+```
+
+Также следует отметить, что в выходные дни значительно большее количество правонарушений приходится на ночное время.
+
+```{r}
+
+plot_data<-as.matrix(table(data$hours,data$weekday))
+plot_data<-melt(plot_data)
+
+p <- ggplot(plot_data, aes(x=Var1, y=value, group=Var2, colour=Var2)) + 
+  theme_bw() + scale_fill_continuous(guide = "legend") + scale_colour_discrete(name=NULL) +
+  geom_line() + xlab("Години") + ylab("Кількість правопорушень")
+
+p
+
+```
+
+Большинство правонарушений происходит преимущественно в хорошую погоду.
+
+```{r}
+
+data_plot <- data %>%
+        group_by(year,month,day,Conditions) %>%
+        summarise(count = n()) 
+
+Conditions<-aggregate(data_plot$count, by=list(Category=data_plot$Conditions), FUN=sum)
+
+data_plot$Conditions <- factor(data_plot$Conditions, Conditions[order(Conditions$x),]$Category, Conditions[order(Conditions$x),]$Category)
+
+p <- ggplot(data = data_plot,aes(x=Conditions, y=count,fill = as.factor(Conditions), group = Conditions)) + 
+        geom_boxplot() + theme_bw() +
+        theme(legend.position="None") +
+        xlab("Погодні умови")+
+        ylab("Кількість правопорушень") + coord_flip()
+p
+
+```
+
+Распределение количества преступлений в зависимости температуры воздуха подтверждает гипотезу о том, что на холодное время приходится меньше преступлений.
+
+```{r}
+
+data_plot <- data %>%
+        group_by(month,day,TemperatureC) %>%
+        summarise(count = n()) 
+
+data_plot<- data_plot[!data_plot$TemperatureC==-9999,]
+p <- ggplot(data = data_plot,aes(x=TemperatureC, y=count,fill = as.factor(TemperatureC), group = TemperatureC)) + 
+        geom_boxplot() + theme_bw() +
+        theme(legend.position="None") +
+        xlab("Температура, C")+
+        ylab("Кількість правопорушень")
+p
+
+```
+
+Также росту преступности способствует рост атмосферного давления.
+
+```{r}
+
+data_plot <- data %>%
+        group_by(month,day,Sea.Level.PressurehPa) %>%
+        summarise(count = n()) 
+
+data_plot<- data_plot[!data_plot$Sea.Level.PressurehPa==-9999,]
+
+p <- ggplot(data = data_plot,aes(x=Sea.Level.PressurehPa, y=count,fill = as.factor(Sea.Level.PressurehPa), group = Sea.Level.PressurehPa)) + 
+        geom_boxplot() + theme_bw() + geom_vline(xintercept=1013, color="red") +
+        theme(legend.position="None") +
+        xlab("Атмосферний тиск, мБар")+
+        ylab("Кількість правопорушень")
+p
+
+```
+
+
+
+```{r}
+
+data_plot <- data %>%
+        group_by(month,day,round(as.numeric(data$Wind.SpeedKm.h))) %>%
+        summarise(count = n()) 
+names(data_plot)[3] <- "Wind.SpeedKm.h"
+
+data_plot<- data_plot[!data_plot$Wind.SpeedKm.h==-9999,]
+data_plot$Wind.SpeedKm.h <- as.numeric(data_plot$Wind.SpeedKm.h)
+p <- ggplot(data = data_plot,aes(x=Wind.SpeedKm.h, y=count,fill = as.factor(Wind.SpeedKm.h), group = Wind.SpeedKm.h)) + 
+        geom_boxplot() + theme_bw() + 
+        theme(legend.position="None") +
+        xlab("Швидкість вітру")+
+        ylab("Кількість правопорушень")
+p
+
+```
+
+Есть также основания полагать, что уровень преступности может быть связан с ненормировано повышенной влажностью воздуха.
+
+```{r}
+
+data_plot <- data %>%
+        group_by(month,day,Humidity) %>%
+        summarise(count = n()) 
+
+data_plot<- data_plot[!data_plot$Humidity==-9999,]
+
+data_plot$Humidity <- as.numeric(data_plot$Humidity)
+p <- ggplot(data = data_plot,aes(x=Humidity, y=count,fill = as.factor(Humidity), group = Humidity)) + 
+        geom_boxplot() + theme_bw() + geom_vline(xintercept=c(30,70), color="red") +
+        theme(legend.position="None") +
+        xlab("Вологість повітря")+
+        ylab("Кількість правопорушень")
+
+p
+
+```
+
+Изменение курса валют непосредственно мало влияет на совершение преступлений. Возможна необходим другой подход - например, оценка скачка курса по сравнению с предыдущим периодом, средневзвешенный курс за неделю или еще что-либо.
+
+```{r}
+
+data_plot <- data %>%
+        group_by(USD) %>%
+        summarise(count = n()) 
+
+p <- ggplot(data = data_plot,aes(x=USD, y=count, color = count)) + 
+        geom_point() + theme_bw() +
+        theme(legend.position="None") +
+        xlab("Курс долара США")+
+        ylab("Кількість правопорушень")
+
+p
+
+data_plot <- data %>%
+        group_by(EUR) %>%
+        summarise(count = n()) 
+
+p <- ggplot(data = data_plot,aes(x=EUR, y=count, color = count)) + 
+        geom_point() + theme_bw() +
+        theme(legend.position="None") +
+        xlab("Курс євро")+
+        ylab("Кількість правопорушень")
+
+p
+
+
+data_plot <- data %>%
+        group_by(RUB) %>%
+        summarise(count = n()) 
+
+p <- ggplot(data = data_plot,aes(x=RUB, y=count, color = count)) + 
+        geom_point() + theme_bw() +
+        theme(legend.position="None") +
+        xlab("Курс російського рубля")+
+        ylab("Кількість правопорушень")
+
+p
+
+```
+
+Распределение преступлений по наличию по-близости мест общественного пользования показывает, что чаще всего правонарушения происходят возле больниц, кафе, банков и банковских терминалов. Следует учесть, что это также может быть связано с количеством иест общественного пользования.
+
+```{r}
+
+data_plot <- data[data[,names(data)[21]],] %>% 
+  group_by(year,month,day) %>%
+  summarise(count = n()) 
+  data_plot$name <- names(data)[21]
+
+for(name in names(data[22:47])) {
+  temp <- data[data[,name],] %>% 
+  group_by(year,month,day) %>%
+  summarise(count = n()) 
+  temp$name <- name
+  data_plot <- rbind(data_plot,temp)
+}
+
+categories<-aggregate(data_plot$count, by=list(Category=data_plot$name), FUN=sum)
+
+data_plot$name <- factor(data_plot$name, categories[order(categories$x),]$Category, categories[order(categories$x),]$Category)
+
+p <- ggplot(data = data_plot,aes(x=name, y=count,fill = as.factor(name), group = name)) + 
+        geom_boxplot() + 
+        theme(legend.position="None") +
+        xlab("Тип місця публічного користування")+
+        ylab("Кількість правопорушень") + coord_flip()
+p
+
+
+# Загружаем все места общественного пользования
+amenities <- read.csv("criminal/amenities-nodes.csv", sep="\t",header=T)
+
+# Поскольку слишком много типов мест, некоторые из них есть смысл объединить
+amenities$amenity_type[amenities$amenity_type %in% c("bar","bbq","biergarten","cafe","fast_food","food_court","internet_access","internet_cafe","kitchen","restaurant","pub")] <- "cafe"
+amenities$amenity_type[amenities$amenity_type %in% c("agency","bookmaker","casino","lottery","office","pawnbrocker","pawnshop","register_office","community_centre","coworking_space")] <- "agency"
+amenities$amenity_type[amenities$amenity_type %in% c("bicycle_parking","bicycle_rental","bicycle_repair_station","ski_rental","boat_rental")] <- "bicycle_rental"
+amenities$amenity_type[amenities$amenity_type %in% c("atm","bureau_de_change","payment_terminal","post_office;bank;atm")] <- "atm"
+amenities$amenity_type[amenities$amenity_type %in% c("bus_station","substation","taxi")] <- "taxi"
+amenities$amenity_type[amenities$amenity_type %in% c("car_rental","car_sharing","car_wash","charging_station","fuel","parking","parking_entrance","parking_space","vehicle_inspection")] <- "parking"
+amenities$amenity_type[amenities$amenity_type %in% c("cinema","arts_centre","library","publisher","stage","studio","theatre","tourism")] <- "arts_centre"
+amenities$amenity_type[amenities$amenity_type %in% c("clinic","emergency_service","fire_station","hospital","rescue_station","sanatorium","doctors","dentist","pharmacy")] <- "hospital"
+amenities$amenity_type[amenities$amenity_type %in% c("drinking_water","water_point")] <- "drinking_water"
+amenities$amenity_type[amenities$amenity_type %in% c("education","educational","educational_institute","kindergarten","school","translation","university","college")] <- "education"
+amenities$amenity_type[amenities$amenity_type %in% c("embassy","government","social_facility","townhall","wedding","courthouse","public_building")] <- "government"
+amenities$amenity_type[amenities$amenity_type %in% c("nightclub","sauna","stripclub","club")] <- "nightclub"
+amenities$amenity_type[amenities$amenity_type %in% c("post_office","post_box")] <- "post_box" 
+amenities$amenity_type[amenities$amenity_type %in% c("grocery","shop")] <- "shop"
+amenities$amenity_type[amenities$amenity_type %in% c("gym","swimming_pool","training","training centr")] <- "gym"
+amenities$amenity_type[amenities$amenity_type %in% c("telephone","thermometer","toilets","vending_machine","clock")] <- "vending_machine"
+amenities$amenity_type[amenities$amenity_type %in% c("pet","veterinary")] <- "veterinary"
+amenities$amenity_type[amenities$amenity_type %in% c("recycling","waste_basket","waste_disposal")] <- "recycling"
+
+am<-as.data.frame(table(amenities$amenity_type))
+
+rel_categories <- merge(categories,am, by.x="Category", by.y="Var1")
+rel_categories$x <- rel_categories$x/rel_categories$Freq
+
+data_plot2 <- merge(data_plot,am, by.x="name", by.y="Var1")
+data_plot2$count <- data_plot2$count/data_plot2$Freq 
+data_plot2$name <- factor(data_plot2$name, categories[order(rel_categories$x),]$Category, rel_categories[order(rel_categories$x),]$Category)
+
+p <- ggplot(data = data_plot2,aes(x=name, y=count,fill = as.factor(name), group = name)) + 
+        geom_boxplot() + 
+        theme(legend.position="None") +
+        xlab("Тип місця публічного користування")+
+        ylab("Відносна кількість правопорушень (од/кількість місць)") + coord_flip()
+p
+
+```
+
+Тепловые карты показывают, что уровень преступности связан с плотностью населения. На картах нанесена выборка из 100 000 преступений.
+
+```{r}
+
+map<-get_map(location="kiev", zoom= 11, color = "bw", source="osm")
+
+set.seed(1)
+ggmap(map, extent='device') + 
+     geom_point(data=data[sample(1:nrow(data),100000),], aes(x=lon, y=lat),
+                alpha = 1/100,color = "red")+
+     scale_colour_brewer(type="qual")
+
+
+contours <- stat_density2d(aes(x = lon, y = lat, fill = ..level.., alpha=..level..), size = 0.1, data = data[sample(1:nrow(data),100000),], n=600, geom = "polygon")
+
+ggmap(map, extent='device', legend="topleft") + contours +
+  scale_alpha_continuous(range=c(0.25,0.4), guide='none') +
+  scale_fill_gradient('Щільність\nправопорушень')+
+  ggtitle('Правопорушення у м. Києві')
+
+```
+
+
