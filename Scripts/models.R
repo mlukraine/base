@@ -29,7 +29,7 @@ data <- data[complete.cases(data), ]
 # Удаляем переменные, которые являются константами для всего массива
 
 remove = lapply(sapply(data, table), length)==1
-data <- train[!names(data) %in% names(remove)[remove]]
+data <- data[!names(data) %in% names(remove)[remove]]
 
 # Создание массива для обучения и валидации
 
